@@ -104,29 +104,68 @@ int main() {
 	  // Previous path size
 	  int previous_path_size = previous_path_x.size();
 
-	  // Check if there's a car too close to the ego car
+	  // Set target velocity
+	  double target_velocity = 49.5;
+
+	  // Check if there's a car too close to the ego car and to its left and right
+	  if (previous_path_size > 0) {
+	    car_s = end_path_s;
+	  }
+	  
 	  bool is_too_close = false;
+	  bool is_car_left = false;
+	  bool is_car_right = false;
 	  double sf_s, sf_d, sf_vx, sf_vy, sf_velocity, s_future;
 
 	  for (int i = 0; i < sensor_fusion.size(); i++) {
-	    // Check if a car is in ego car's lane
+	    // Grab sensor fusion measurement of a car
+	    sf_vx = sensor_fusion[i][3];
+	    sf_vy = sensor_fusion[i][4];
+	    sf_velocity = sqrt(pow(sf_vx, 2) + pow(sf_vy, 2));
+	    sf_s = sensor_fusion[i][5];
 	    sf_d = sensor_fusion[i][6];
-
+	    s_future = sf_s + ((double)previous_path_size * .02 * sf_velocity);
+	      
+	    // Check if a car is in ego car's lane
 	    if ((sf_d < 2 + (lane * 4) + 2) && (sf_d > 2 + (lane * 4) - 2)) {
-	      sf_vx = sensor_fusion[i][3];
-	      sf_vy = sensor_fusion[i][4];
-	      sf_velocity = sqrt(pow(sf_vx, 2) + pow(sf_vy, 2));
-	      sf_s = sensor_fusion[i][5];
-
 	      // Check if a car's future position would be too close to the ego car's end path waypoint
-	      s_future = sf_s + (previous_path_size * .02 * sf_velocity);
-
-	      if ((s_future > end_path_s) && (s_future - end_path_s < 30)) {
+	      if ((s_future > car_s) && (s_future - car_s < 30)) {
 		is_too_close = true;
+	      }
+	    }
+
+	    // Check if there's a car on the left lane
+	    else if ((sf_d < lane * 4) && (sf_d > (lane * 4) - 4)) {
+	      // Check if the car on the left lane prevents ego car to change lane
+	      // (whether the car is 20m in front or behind the ego car).
+	      if (abs(s_future - car_s) < 20) {
+		is_car_left = true;
+	      }
+	    }
+
+	    // Check if there's a car on the right lane
+	    else if ((sf_d < (lane * 4) + 8) && (sf_d > (lane * 4) + 4)) {
+	      // Check if the car on the right lane prevents ego car to change lane
+	      // (whether the car is 20m in front or behind the ego car)
+	      if (abs(s_future - car_s) < 20) {
+		is_car_right = true;
 	      }
 	    }
 	  }
 
+	  // Change lane if there's a car too close and it's safe
+	  if (is_too_close) {
+	    // If it's safe to turn left and the ego is not on the leftmost lane
+	    if (!is_car_left && (lane != 0)) {
+	      lane -= 1;
+	    }
+	    // If it's safe to turn right and the ego is not on the rightmost lane
+	    else if (!is_car_right && (lane != 2)) {
+	      lane += 1;
+	    }
+	  }
+
+	  
 	  // Define anchor points for appending  waypoints to the next path
 	  vector<double> anchor_points_x, anchor_points_y;
 
@@ -136,7 +175,7 @@ int main() {
 	  double ref_yaw = deg2rad(car_yaw);
 
 	  // If previous path is almost empty, set car's location as reference
-	  if (previous_path_size < 3) {
+	  if (previous_path_size < 2) {
 	    double previous_car_x = car_x - cos(car_yaw);
 	    double previous_car_y = car_y - sin(car_yaw);
 
@@ -173,8 +212,6 @@ int main() {
 	  anchor_points_y.push_back(anchor_wp1[1]);
 	  anchor_points_y.push_back(anchor_wp2[1]);
 
-
-
 	  // Transform anchor points' basis, so the car is at origin and at 0 degree yaw
 	  double shift_x, shift_y;
 	  for (int i = 0; i < anchor_points_x.size(); i++) {
@@ -187,9 +224,10 @@ int main() {
 	  
 	  // Create a spline
 	  tk::spline spline;
+	  
 	  // Set points to the spline
 	  spline.set_points(anchor_points_x, anchor_points_y);
-	  
+
 	  // The car's path
 	  vector<double> next_x_vals;
           vector<double> next_y_vals;
@@ -204,16 +242,12 @@ int main() {
 	  double target_x = 30.0;
 	  double target_y = spline(target_x);
 	  double target_distance = sqrt(pow(target_x, 2) + pow(target_y, 2));
-	  double target_velocity = 49.5;
-	  
-	  const double meter_per_mile_ = 1609.344;
-	  const double seconds_per_hour_ = 3600.0;;
 
 	  // Define x_add_on as waypoint x to add in the basis of car's at origin with yaw 0
 	  double x_add_on = 0;
 
 	  // Adding waypoints to the next path
-	  double N, next_x, next_y;
+	  double next_x, next_y, N;
 	  
 	  for (int i = 0; i < 50 - previous_path_size; ++i) {
 	    // Slows down if there's a car too close or speeds up otherwise
@@ -223,9 +257,7 @@ int main() {
 	      ref_velocity += .224;
 	    }
 
-	    // Set N for the number of points to take in a splie
-	    N = target_distance / (0.02 * (ref_velocity / (seconds_per_hour_ / meter_per_mile_)));
-	    
+	    N = target_distance / (0.02 * (ref_velocity / 2.24));
 	    next_x = x_add_on + (target_x / N);
 	    next_y = spline(next_x);
 
